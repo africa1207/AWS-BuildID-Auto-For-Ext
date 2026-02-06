@@ -1,14 +1,13 @@
 <div align="center">
 
 # 🚀 AWS Auto Registration - Chrome Extension
+> fork自：https://github.com/Specia1z/AWS-BuildID-Auto-For-Ext
 
 ## 新增：自动获取gmail验证码
 主要流程：
 - 先按照 https://developers.google.com/workspace/gmail/api/quickstart/js?hl=zh-cn 中"启用 API"、"配置 OAuth 权限请求页面"、"为 Web 应用授权凭据"这三部分，其中"为 Web 应用授权凭据"创建应用类型选择Chrome Extension，Item id填写浏览器加载本扩展后的扩展id，在 `chrome://extensions/` 获取。最后创建应用复制生成的 Client ID，填写到manifest.json中的oauth2.client_id
 - 接着在 https://console.cloud.google.com/auth/audience 中找到Test users，添加你的邮件地址
 - 重新加载扩展，等几分钟即可开始注册
-
----
 
 ### ⚡ 一键自动化注册 AWS Builder ID 的浏览器扩展
 
