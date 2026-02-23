@@ -256,6 +256,7 @@
     DEVICE_CONFIRM: 'device_confirm',
     ALLOW_ACCESS: 'allow_access',
     COMPLETE: 'complete',
+    BLOCKED: 'blocked',
     UNKNOWN: 'unknown'
   };
 
@@ -422,6 +423,13 @@
     const text = document.body?.innerText || '';
 
     console.log('[Content Script] 检测页面 - URL:', url, 'Host:', host);
+
+    // 403 / Forbidden 页面检测
+    if (document.title.includes('403') || document.title.includes('Forbidden') ||
+        text.includes('403 Forbidden') || text.includes('Access Denied') ||
+        (text.includes('Request blocked') && text.length < 500)) {
+      return PAGE_TYPES.BLOCKED;
+    }
 
     // 完成页面
     if (text.includes('successfully authorized') || text.includes('Authorization complete') || text.includes('You have been successfully authorized')) {
@@ -765,6 +773,12 @@
           break;
         case PAGE_TYPES.COMPLETE:
           success = handleCompletePage();
+          break;
+        case PAGE_TYPES.BLOCKED:
+          console.warn('[Content Script] 页面被阻止 (403/Forbidden)');
+          chrome.runtime.sendMessage({ type: 'PAGE_BLOCKED' }).catch(() => {});
+          updateStep('页面被阻止 (403)');
+          success = true; // 标记已处理，避免重复检测
           break;
         default:
           console.log('[Content Script] 未知页面，继续等待...');
