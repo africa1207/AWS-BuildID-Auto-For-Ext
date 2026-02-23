@@ -41,6 +41,21 @@ let proxyRotateIndex = 0; // 轮换索引
 let proxyUsageLimit = 1;  // 单个代理使用次数上限
 let proxyUsageCount = 0;  // 当前代理已使用次数
 let proxyDeadSet = new Set(); // 全局不可用代理集合（跨会话持久化）
+let pageTimeoutMs = 300000;   // 页面无动作超时（毫秒，默认5分钟）
+
+// IP 检测 API 全量列表
+const IP_DETECT_APIS = [
+  { id: 'ipinfo', label: 'ipinfo.io', url: 'https://ipinfo.io/json', parse: d => d.country ? { countryCode: d.country, timezone: d.timezone, ip: d.ip } : null },
+  { id: 'ipwhois', label: 'ipwhois.app', url: 'https://ipwhois.app/json/', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null },
+  { id: 'ipsb', label: 'api.ip.sb', url: 'https://api.ip.sb/geoip', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null }
+];
+// 启用的 API id 列表（默认全部启用）
+let ipDetectEnabled = ['ipinfo', 'ipwhois', 'ipsb'];
+
+function getEnabledIpApis() {
+  if (ipDetectEnabled.length === 0) return [];
+  return IP_DETECT_APIS.filter(a => ipDetectEnabled.includes(a.id));
+}
 
 // MoeMail 配置
 let moemailApiUrl = 'https://';  // API 地址
@@ -63,11 +78,8 @@ async function ensureOffscreen() {
 }
 
 async function detectGeoByIp() {
-  const apis = [
-    { url: 'https://ipinfo.io/json', parse: d => d.country ? { countryCode: d.country, timezone: d.timezone, ip: d.ip } : null },
-    { url: 'https://ipwhois.app/json/', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null },
-    { url: 'https://api.ip.sb/geoip', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null }
-  ];
+  const apis = getEnabledIpApis();
+  if (apis.length === 0) return null;
   await ensureOffscreen();
   for (const api of apis) {
     try {
@@ -289,7 +301,7 @@ function generateSessionId() {
 /**
  * 等待标签页加载完成
  */
-function waitForTabLoad(tabId, timeout = 30000) {
+function waitForTabLoad(tabId, timeout = 30000, expectedUrl = null) {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
 
@@ -299,8 +311,13 @@ function waitForTabLoad(tabId, timeout = 30000) {
         console.log(`[waitForTabLoad] tabId=${tabId}, status=${tab.status}, url=${tab.url}`);
 
         if (tab.status === 'complete') {
-          resolve(tab);
-          return;
+          // 如果指定了期望 URL，确保当前 URL 匹配
+          if (expectedUrl && tab.url && !tab.url.startsWith(expectedUrl)) {
+            // URL 还没切换，继续等待
+          } else {
+            resolve(tab);
+            return;
+          }
         }
       } catch (e) {
         console.error(`[waitForTabLoad] tabId=${tabId} 获取失败:`, e);
@@ -407,6 +424,8 @@ function createSession() {
     token: null,
     // 轮询控制
     pollAbort: false,
+    // 页面被阻止标志 (403)
+    pageBlocked: false,
     // 会话开始时间（用于过滤验证码邮件）
     startTime: Date.now(),
     // 验证码
@@ -585,7 +604,8 @@ async function runSessionRegistration(session) {
 
     try {
       // 代理模式：先开 IP 检测页创建无痕窗口
-      const initialUrl = useProxy ? 'https://ipinfo.io/json' : authInfo.verificationUriComplete;
+      const enabledApis = getEnabledIpApis();
+      const initialUrl = (useProxy && enabledApis.length > 0) ? enabledApis[0].url : authInfo.verificationUriComplete;
       console.log(`[Session ${session.id}] 准备创建无痕窗口，URL:`, initialUrl);
 
       const window = await chrome.windows.create({
@@ -623,11 +643,19 @@ async function runSessionRegistration(session) {
         const maxAttempts = proxyManualList.length;
         let proxyConnected = false;
 
-        const ipApis = [
-          { url: 'https://ipinfo.io/json', parse: d => d.country ? { countryCode: d.country, timezone: d.timezone, ip: d.ip } : null },
-          { url: 'https://ipwhois.app/json/', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null },
-          { url: 'https://api.ip.sb/geoip', parse: d => d.country_code ? { countryCode: d.country_code, timezone: d.timezone, ip: d.ip } : null }
-        ];
+        const ipApis = getEnabledIpApis();
+
+        if (ipApis.length === 0) {
+          // 未启用任何 IP 检测 API，直接使用代理不检测
+          pendingProxy = getNextProxy(proxyDeadSet);
+          if (pendingProxy) {
+            const proxyKey = `${pendingProxy.scheme}://${pendingProxy.host}:${pendingProxy.port}`;
+            applyProxyToIncognito(pendingProxy);
+            session.proxy = pendingProxy;
+            proxyConnected = true;
+            console.log(`[Session ${session.id}] 使用代理(跳过连通检测): ${proxyKey}`);
+          }
+        } else {
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           pendingProxy = getNextProxy(proxyDeadSet);
@@ -644,11 +672,17 @@ async function runSessionRegistration(session) {
           for (const api of ipApis) {
             try {
               await chrome.tabs.update(session.tabId, { url: api.url });
-              await waitForTabLoad(session.tabId, 10000);
+              await waitForTabLoad(session.tabId, 10000, api.url);
+              // 等待 DOM 完全就绪
+              await new Promise(r => setTimeout(r, 500));
               const [result] = await chrome.scripting.executeScript({
                 target: { tabId: session.tabId },
                 func: () => {
-                  try { return JSON.parse(document.body.innerText); } catch (e) { return null; }
+                  try {
+                    // 优先取 pre 标签内容（浏览器常把 JSON 包在 pre 里），否则取 body
+                    const text = (document.querySelector('pre') || document.body).innerText.trim();
+                    return JSON.parse(text);
+                  } catch (e) { return null; }
                 }
               });
               const parsed = result?.result ? api.parse(result.result) : null;
@@ -673,6 +707,7 @@ async function runSessionRegistration(session) {
             markProxyDead(proxyKey);
           }
         }
+        } // end if ipApis.length > 0
 
         if (!proxyConnected) {
           console.warn(`[Session ${session.id}] 所有代理均不可用 (${proxyDeadSet.size} 个)，切换为直连模式`);
@@ -682,6 +717,11 @@ async function runSessionRegistration(session) {
 
         // 生成指纹
         updateSession(session.id, { step: '生成随机指纹...' });
+        if (geoInfo) {
+          console.log(`[Session ${session.id}] 基于代理 IP 生成指纹: country=${geoInfo.countryCode}, timezone=${geoInfo.timezone}, ip=${geoInfo.ip}`);
+        } else {
+          console.warn(`[Session ${session.id}] 无 geoInfo，使用纯随机指纹`);
+        }
         fingerprint = generateRandomFingerprint(geoInfo);
         session.fingerprint = fingerprint;
         console.log(`[Session ${session.id}] 指纹已生成: language=${fingerprint.languages[0]}, timezone=${fingerprint.timezone}, screen=${fingerprint.screen.width}x${fingerprint.screen.height}, ua=${fingerprint.userAgent.substring(0, 60)}...`);
@@ -696,7 +736,7 @@ async function runSessionRegistration(session) {
       updateSession(session.id, { step: '等待页面加载...' });
       let loadTimeout = false;
       try {
-        await waitForTabLoad(session.tabId, 30000);
+        await waitForTabLoad(session.tabId, pageTimeoutMs);
         console.log(`[Session ${session.id}] 页面已加载`);
       } catch (e) {
         console.warn(`[Session ${session.id}] 等待页面加载: ${e.message}`);
@@ -752,18 +792,25 @@ async function runSessionRegistration(session) {
       releaseLock();
     }
 
-    // 加载成功，跳出重试循环
-    break;
-
-    } // end for retryRound
-
-    // 步骤 6: 轮询 Token
+    // 加载成功，进入 Token 轮询
+    // 步骤 6: 轮询 Token（在重试循环内，以便 403 时换代理重试）
     session.status = 'polling_token';
+    session.pageBlocked = false; // 重置标志
     updateSession(session.id, { step: '自动填表中...' });
 
     const tokenResult = await pollSessionToken(session);
 
-    if (tokenResult) {
+    // 页面被阻止 (403)，换代理重试
+    if (tokenResult === 'PAGE_BLOCKED' && useProxy && retryRound < maxProxyRetries - 1) {
+      if (pendingProxy) {
+        const failedKey = `${pendingProxy.scheme}://${pendingProxy.host}:${pendingProxy.port}`;
+        markProxyDead(failedKey);
+        console.warn(`[Session ${session.id}] 页面 403，标记代理 ${failedKey} 不可用，将更换代理重试`);
+      }
+      continue;
+    }
+
+    if (tokenResult && tokenResult !== 'PAGE_BLOCKED') {
       // 成功
       session.status = 'completed';
       session.token = tokenResult;
@@ -788,8 +835,10 @@ async function runSessionRegistration(session) {
 
       return true;
     } else {
-      throw new Error('Token 获取超时或被中断');
+      throw new Error(tokenResult === 'PAGE_BLOCKED' ? '页面被阻止 (403)，代理均不可用' : 'Token 获取超时或被中断');
     }
+
+    } // end for retryRound
 
   } catch (error) {
     console.error(`[Session ${session.id}] 注册失败:`, error);
@@ -832,26 +881,68 @@ async function pollSessionToken(session) {
   if (!session.oidcClient) return null;
 
   const startTime = Date.now();
-  const timeout = 600000; // 10 分钟超时
+  const timeout = 600000; // Token 轮询固定 10 分钟超时
   const pollInterval = Math.max(session.oidcClient.interval * 1000, 2000);
 
-  while (!session.pollAbort && !shouldStop && Date.now() - startTime < timeout) {
-    try {
-      const result = await session.oidcClient.getToken();
-      if (result) {
-        console.log(`[Session ${session.id}] Token 获取成功`);
-        return result;
+  // pageBlocked 中断 Promise
+  let resolveBlocked;
+  const blockedPromise = new Promise(r => { resolveBlocked = r; });
+  const checkBlocked = setInterval(() => {
+    if (session.pageBlocked) {
+      resolveBlocked('PAGE_BLOCKED');
+    }
+  }, 500);
+
+  // 无进度超时检测
+  let lastStep = session.step;
+  let lastStepChangeTime = Date.now();
+
+  try {
+    while (!session.pollAbort && !shouldStop && Date.now() - startTime < timeout) {
+      // 检测 step 是否有变化
+      if (session.step !== lastStep) {
+        lastStep = session.step;
+        lastStepChangeTime = Date.now();
+      } else if (Date.now() - lastStepChangeTime > pageTimeoutMs) {
+        console.warn(`[Session ${session.id}] 页面无动作超时 (${pageTimeoutMs / 1000}s)，step 停留在: ${lastStep}`);
+        return null;
       }
-    } catch (error) {
-      if (!error.message.includes('authorization_pending')) {
-        console.error(`[Session ${session.id}] Token 轮询错误:`, error);
+
+      try {
+        // 用 Promise.race 让 pageBlocked 能立即中断 getToken
+        const raceResult = await Promise.race([
+          session.oidcClient.getToken(),
+          blockedPromise
+        ]);
+        if (raceResult === 'PAGE_BLOCKED') {
+          console.warn(`[Session ${session.id}] 页面被阻止 (403)，中断 Token 轮询`);
+          return 'PAGE_BLOCKED';
+        }
+        if (raceResult) {
+          console.log(`[Session ${session.id}] Token 获取成功`);
+          return raceResult;
+        }
+      } catch (error) {
+        if (!error.message.includes('authorization_pending')) {
+          console.error(`[Session ${session.id}] Token 轮询错误:`, error);
+        }
+      }
+
+      // sleep 也用 race，让 pageBlocked 能中断等待
+      const sleepResult = await Promise.race([
+        new Promise(resolve => setTimeout(() => resolve(null), pollInterval)),
+        blockedPromise
+      ]);
+      if (sleepResult === 'PAGE_BLOCKED') {
+        console.warn(`[Session ${session.id}] 页面被阻止 (403)，中断 Token 轮询`);
+        return 'PAGE_BLOCKED';
       }
     }
 
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    return null;
+  } finally {
+    clearInterval(checkBlocked);
   }
-
-  return null;
 }
 
 /**
@@ -1409,12 +1500,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.storage.local.set({ proxyUsageLimit });
         console.log('[Service Worker] 设置单代理使用次数:', proxyUsageLimit);
       }
+      if (message.ipDetectEnabled !== undefined) {
+        ipDetectEnabled = message.ipDetectEnabled;
+        chrome.storage.local.set({ ipDetectEnabled });
+        console.log('[Service Worker] 设置 IP 检测 API:', ipDetectEnabled);
+      }
+      if (message.pageTimeout !== undefined) {
+        pageTimeoutMs = Math.max(30000, parseInt(message.pageTimeout) || 300000);
+        chrome.storage.local.set({ pageTimeoutMs });
+        console.log('[Service Worker] 设置页面超时:', pageTimeoutMs, 'ms');
+      }
       console.log('[Service Worker] 设置代理配置:', { proxyApiUrl, proxyEnabled, manualCount: proxyManualList.length, usageLimit: proxyUsageLimit });
       sendResponse({ success: true, parsedCount: proxyManualList.length });
       break;
 
     case 'GET_PROXY_CONFIG':
-      sendResponse({ proxyApiUrl, proxyApiKey, proxyEnabled, proxyManualRaw, parsedCount: proxyManualList.length, proxyUsageLimit, deadProxies: [...proxyDeadSet] });
+      sendResponse({ proxyApiUrl, proxyApiKey, proxyEnabled, proxyManualRaw, parsedCount: proxyManualList.length, proxyUsageLimit, ipDetectEnabled, ipDetectApis: IP_DETECT_APIS.map(a => ({ id: a.id, label: a.label })), deadProxies: [...proxyDeadSet], pageTimeoutMs });
       break;
 
     case 'REVIVE_PROXY':
@@ -1583,6 +1684,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
+    case 'PAGE_BLOCKED':
+      if (session) {
+        session.pageBlocked = true;
+        console.warn(`[Session ${session.id}] 页面被阻止 (403/Forbidden)`);
+      }
+      sendResponse({ success: true });
+      break;
+
     case 'AUTH_COMPLETED':
       if (session) {
         updateSession(session.id, { step: '授权完成，等待 Token...' });
@@ -1736,7 +1845,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 // 恢复历史记录、Gmail API 配置和邮箱渠道
-chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSenderFilter', 'mailProvider', 'gptmailApiKey', 'duckMailApiKey', 'duckMailDomain', 'moemailApiUrl', 'moemailApiKey', 'moemailDomain', 'moemailPrefix', 'moemailRandomLength', 'moemailDuration', 'denyAccess', 'proxyApiUrl', 'proxyApiKey', 'proxyEnabled', 'proxyManualRaw', 'proxyUsageLimit', 'proxyDeadList']).then((stored) => {
+chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSenderFilter', 'mailProvider', 'gptmailApiKey', 'duckMailApiKey', 'duckMailDomain', 'moemailApiUrl', 'moemailApiKey', 'moemailDomain', 'moemailPrefix', 'moemailRandomLength', 'moemailDuration', 'denyAccess', 'proxyApiUrl', 'proxyApiKey', 'proxyEnabled', 'proxyManualRaw', 'proxyUsageLimit', 'proxyDeadList', 'ipDetectEnabled', 'pageTimeoutMs']).then((stored) => {
   if (stored.registrationHistory) {
     registrationHistory = stored.registrationHistory;
     console.log('[Service Worker] 恢复历史记录:', registrationHistory.length, '条');
@@ -1822,6 +1931,14 @@ chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSen
     if (proxyDeadSet.size > 0) {
       console.log('[Service Worker] 恢复不可用代理:', proxyDeadSet.size, '个');
     }
+  }
+  if (stored.ipDetectEnabled && Array.isArray(stored.ipDetectEnabled)) {
+    ipDetectEnabled = stored.ipDetectEnabled;
+    console.log('[Service Worker] 恢复 IP 检测 API:', ipDetectEnabled);
+  }
+  if (stored.pageTimeoutMs !== undefined) {
+    pageTimeoutMs = Math.max(30000, parseInt(stored.pageTimeoutMs) || 300000);
+    console.log('[Service Worker] 恢复页面超时:', pageTimeoutMs, 'ms');
   }
 
   // 恢复 Gmail API 配置

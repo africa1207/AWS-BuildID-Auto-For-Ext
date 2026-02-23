@@ -182,6 +182,14 @@
           <label style="font-size: 11px; white-space: nowrap;">单代理注册次数:</label>
           <input type="number" id="proxy-usage-limit" min="1" max="100" value="1" class="gmail-input" style="width: 50px; text-align: center;">
         </div>
+        <div style="margin-top: 4px;">
+          <label style="font-size: 11px;">IP 检测 API:</label>
+          <div id="ip-detect-checkboxes" style="display: flex; gap: 8px; margin-top: 2px; flex-wrap: wrap;"></div>
+        </div>
+        <div class="gmail-input-row" style="margin-top: 4px; align-items: center;">
+          <label style="font-size: 11px; white-space: nowrap;">页面超时(秒):</label>
+          <input type="number" id="page-timeout-input" min="30" max="600" value="300" class="gmail-input" style="width: 60px; text-align: center;">
+        </div>
         <div class="gmail-input-row" style="margin-top: 4px;">
           <input type="text" id="proxy-api-url" placeholder="代理提取 API 地址（可选）" class="gmail-input" style="flex: 1;">
         </div>
