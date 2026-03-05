@@ -6,6 +6,7 @@
   "default_locale": "zh_CN",
   "permissions": [
     "activeTab",
+    "permissions",
     "scripting",
     "storage",
     "tabs",
@@ -37,7 +38,11 @@
     "https://*.112857.xyz/*",
     "https://ipinfo.io/*",
     "https://ipwhois.app/*",
-    "https://api.ip.sb/*"
+    "https://api.ip.sb/*",
+    "https://*.opena1.tech/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "incognito": "spanning",
   "action": {

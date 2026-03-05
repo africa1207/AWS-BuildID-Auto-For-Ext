@@ -6,6 +6,7 @@
 import { GmailApiClient } from '../lib/gmail-api.js';
 import { createProvider } from '../lib/mail-providers/index.js';
 import { DuckMailProvider } from '../lib/mail-providers/duckmail.js';
+import { TempServiceProvider } from '../lib/mail-providers/temp-service.js';
 import { AWSDeviceAuth, validateToken, refreshAndValidateToken } from '../lib/oidc-api.js';
 import { generatePassword, generateName } from '../lib/utils.js';
 import { generateRandomFingerprint, injectFingerprint } from '../lib/fingerprint.js';
@@ -64,6 +65,13 @@ let moemailDomain = '';  // 邮箱域名后缀
 let moemailPrefix = '';  // 固定前缀（可选）
 let moemailRandomLength = 5;  // 随机位数
 let moemailDuration = 0;  // 有效期（0=永久）
+
+// Temp-Service 配置
+let tempServiceBaseUrl = '';
+let tempServiceAdminAuth = '';
+let tempServiceCustomAuth = '';
+let tempServiceDomain = '';
+let tempServiceNamePrefix = 'oc';
 
 // ============== 辅助函数 ==============
 
@@ -524,6 +532,12 @@ async function runSessionRegistration(session) {
       providerOptions.prefix = moemailPrefix;
       providerOptions.randomLength = moemailRandomLength;
       providerOptions.duration = moemailDuration;
+    } else if (currentMailProvider === 'temp-service') {
+      providerOptions.baseUrl = tempServiceBaseUrl;
+      providerOptions.adminAuth = tempServiceAdminAuth;
+      providerOptions.customAuth = tempServiceCustomAuth;
+      providerOptions.domain = tempServiceDomain;
+      providerOptions.namePrefix = tempServiceNamePrefix;
     }
 
     session.mailProvider = createProvider(currentMailProvider, providerOptions);
@@ -1588,6 +1602,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
+    case 'SET_TEMP_SERVICE_CONFIG':
+      if (message.baseUrl !== undefined) {
+        tempServiceBaseUrl = message.baseUrl || '';
+        chrome.storage.local.set({ tempServiceBaseUrl });
+      }
+      if (message.adminAuth !== undefined) {
+        tempServiceAdminAuth = message.adminAuth || '';
+        chrome.storage.local.set({ tempServiceAdminAuth });
+      }
+      if (message.customAuth !== undefined) {
+        tempServiceCustomAuth = message.customAuth || '';
+        chrome.storage.local.set({ tempServiceCustomAuth });
+      }
+      if (message.domain !== undefined) {
+        tempServiceDomain = message.domain || '';
+        chrome.storage.local.set({ tempServiceDomain });
+      }
+      if (message.namePrefix !== undefined) {
+        tempServiceNamePrefix = message.namePrefix || 'oc';
+        chrome.storage.local.set({ tempServiceNamePrefix });
+      }
+      console.log('[Service Worker] 设置 Temp-Service 配置');
+      sendResponse({ success: true });
+      break;
+
+    case 'TEST_TEMP_SERVICE_CONNECTION':
+      (async () => {
+        try {
+          const provider = new TempServiceProvider({
+            baseUrl: message.baseUrl || tempServiceBaseUrl,
+            adminAuth: message.adminAuth || tempServiceAdminAuth,
+            customAuth: message.customAuth || tempServiceCustomAuth,
+            domain: message.domain || tempServiceDomain,
+            namePrefix: message.namePrefix || tempServiceNamePrefix
+          });
+
+          // 轻量测试：创建邮箱 -> 立即清理（可能失败也不致命）
+          await provider.createInbox();
+          await provider.cleanup();
+          sendResponse({ success: true });
+        } catch (error) {
+          console.error('[Service Worker] 测试 Temp-Service 连接失败:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+
     case 'GET_MOEMAIL_DOMAINS':
       (async () => {
         try {
@@ -1845,7 +1906,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 // 恢复历史记录、Gmail API 配置和邮箱渠道
-chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSenderFilter', 'mailProvider', 'gptmailApiKey', 'duckMailApiKey', 'duckMailDomain', 'moemailApiUrl', 'moemailApiKey', 'moemailDomain', 'moemailPrefix', 'moemailRandomLength', 'moemailDuration', 'denyAccess', 'proxyApiUrl', 'proxyApiKey', 'proxyEnabled', 'proxyManualRaw', 'proxyUsageLimit', 'proxyDeadList', 'ipDetectEnabled', 'pageTimeoutMs']).then((stored) => {
+chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSenderFilter', 'mailProvider', 'gptmailApiKey', 'duckMailApiKey', 'duckMailDomain', 'moemailApiUrl', 'moemailApiKey', 'moemailDomain', 'moemailPrefix', 'moemailRandomLength', 'moemailDuration', 'tempServiceBaseUrl', 'tempServiceAdminAuth', 'tempServiceCustomAuth', 'tempServiceDomain', 'tempServiceNamePrefix', 'denyAccess', 'proxyApiUrl', 'proxyApiKey', 'proxyEnabled', 'proxyManualRaw', 'proxyUsageLimit', 'proxyDeadList', 'ipDetectEnabled', 'pageTimeoutMs']).then((stored) => {
   if (stored.registrationHistory) {
     registrationHistory = stored.registrationHistory;
     console.log('[Service Worker] 恢复历史记录:', registrationHistory.length, '条');
@@ -1878,6 +1939,12 @@ chrome.storage.local.get(['registrationHistory', 'gmailApiAuthorized', 'gmailSen
     moemailApiUrl = stored.moemailApiUrl;
     console.log('[Service Worker] 恢复 MoeMail API URL:', moemailApiUrl);
   }
+
+  if (stored.tempServiceBaseUrl) tempServiceBaseUrl = stored.tempServiceBaseUrl;
+  if (stored.tempServiceAdminAuth) tempServiceAdminAuth = stored.tempServiceAdminAuth;
+  if (stored.tempServiceCustomAuth !== undefined) tempServiceCustomAuth = stored.tempServiceCustomAuth || '';
+  if (stored.tempServiceDomain) tempServiceDomain = stored.tempServiceDomain;
+  if (stored.tempServiceNamePrefix !== undefined) tempServiceNamePrefix = stored.tempServiceNamePrefix || 'oc';
   if (stored.moemailApiKey) {
     moemailApiKey = stored.moemailApiKey;
     console.log('[Service Worker] 恢复 MoeMail API Key');

@@ -63,6 +63,7 @@
           <option value="gptmail" data-i18n="mailProviderGptmail">GPTMail (需 API Key)</option>
           <option value="duckmail" data-i18n="mailProviderDuckmail">DuckMail (可选 API Key)</option>
           <option value="moemail" data-i18n="mailProviderMoemail">MoeMail (需 API Key)</option>
+          <option value="temp-service" data-i18n="mailProviderTempService">Temp-Service (需配置)</option>
         </select>
       </div>
 
@@ -155,6 +156,29 @@
         </div>
         <p class="provider-hint success" data-i18n="moemailHint">✓ 自定义邮箱前缀和域名，验证码自动获取</p>
         <p id="moemail-status" class="provider-desc"></p>
+      </div>
+
+      <!-- Temp-Service 配置面板 -->
+      <div id="tempservice-config-panel" class="provider-panel" style="display: none;">
+        <div class="gmail-input-row">
+          <input type="url" id="tempservice-base-url" data-i18n-placeholder="tempServiceBaseUrlPlaceholder" placeholder="https://<your-worker-domain>" class="gmail-input">
+        </div>
+        <div class="gmail-input-row" style="margin-top: 6px;">
+          <input type="text" id="tempservice-admin-auth" data-i18n-placeholder="tempServiceAdminAuthPlaceholder" placeholder="x-admin-auth" class="gmail-input">
+        </div>
+        <div class="gmail-input-row" style="margin-top: 6px;">
+          <input type="text" id="tempservice-custom-auth" data-i18n-placeholder="tempServiceCustomAuthPlaceholder" placeholder="x-custom-auth (可选)" class="gmail-input">
+        </div>
+        <div class="gmail-input-row" style="margin-top: 6px;">
+          <input type="text" id="tempservice-domain" data-i18n-placeholder="tempServiceDomainPlaceholder" placeholder="邮箱域名 (例如 opena1.tech)" class="gmail-input" style="flex: 1;">
+          <input type="text" id="tempservice-prefix" data-i18n-placeholder="tempServicePrefixPlaceholder" placeholder="前缀(默认 oc)" class="gmail-input" style="width: 120px;">
+        </div>
+        <div class="gmail-input-row" style="margin-top: 6px;">
+          <button id="tempservice-save-btn" class="btn-small" data-i18n="btnSave">保存</button>
+          <button id="tempservice-test-btn" class="btn-small" data-i18n="btnTest">测试</button>
+        </div>
+        <p id="tempservice-status" class="provider-desc"></p>
+        <p class="provider-hint success" data-i18n="tempServiceHint">✓ 自建临时邮箱，验证码自动获取，注册后自动删除邮箱</p>
       </div>
     </div>
 

@@ -94,6 +94,17 @@ const moemailRandomLengthInput = document.getElementById('moemail-random-length'
 const moemailPreviewText = document.getElementById('moemail-preview-text');
 const moemailStatus = document.getElementById('moemail-status');
 
+// Temp-Service 配置元素
+const tempserviceConfigPanel = document.getElementById('tempservice-config-panel');
+const tempserviceBaseUrlInput = document.getElementById('tempservice-base-url');
+const tempserviceAdminAuthInput = document.getElementById('tempservice-admin-auth');
+const tempserviceCustomAuthInput = document.getElementById('tempservice-custom-auth');
+const tempserviceDomainInput = document.getElementById('tempservice-domain');
+const tempservicePrefixInput = document.getElementById('tempservice-prefix');
+const tempserviceSaveBtn = document.getElementById('tempservice-save-btn');
+const tempserviceTestBtn = document.getElementById('tempservice-test-btn');
+const tempserviceStatus = document.getElementById('tempservice-status');
+
 // Token Pool 元素
 const poolApiKeyInput = document.getElementById('pool-api-key');
 const poolConnectBtn = document.getElementById('pool-connect-btn');
@@ -765,6 +776,7 @@ function switchProviderPanel(providerId) {
   gptmailConfigPanel.style.display = 'none';
   duckMailConfigPanel.style.display = 'none';
   moemailConfigPanel.style.display = 'none';
+  tempserviceConfigPanel.style.display = 'none';
 
   // 显示对应面板
   switch (providerId) {
@@ -785,6 +797,144 @@ function switchProviderPanel(providerId) {
       moemailConfigPanel.style.display = 'block';
       loadMoeMailConfig();  // 切换到 MoeMail 时加载配置
       break;
+    case 'temp-service':
+      tempserviceConfigPanel.style.display = 'block';
+      loadTempServiceConfig();
+      break;
+  }
+}
+
+// ==================== Temp-Service 配置功能 ====================
+
+function showTempServiceStatus(message, type = 'info') {
+  if (!tempserviceStatus) return;
+  tempserviceStatus.textContent = message;
+  tempserviceStatus.className = `provider-desc ${type}`;
+  tempserviceStatus.style.display = 'block';
+  if (type === 'success') {
+    setTimeout(() => {
+      tempserviceStatus.style.display = 'none';
+    }, 3000);
+  }
+}
+
+async function loadTempServiceConfig() {
+  try {
+    const result = await chrome.storage.local.get([
+      'tempServiceBaseUrl',
+      'tempServiceAdminAuth',
+      'tempServiceCustomAuth',
+      'tempServiceDomain',
+      'tempServiceNamePrefix'
+    ]);
+
+    if (result.tempServiceBaseUrl) tempserviceBaseUrlInput.value = result.tempServiceBaseUrl;
+    if (result.tempServiceAdminAuth) tempserviceAdminAuthInput.value = result.tempServiceAdminAuth;
+    if (result.tempServiceCustomAuth !== undefined) tempserviceCustomAuthInput.value = result.tempServiceCustomAuth || '';
+    if (result.tempServiceDomain) tempserviceDomainInput.value = result.tempServiceDomain;
+    if (result.tempServiceNamePrefix !== undefined) tempservicePrefixInput.value = result.tempServiceNamePrefix || '';
+  } catch (error) {
+    console.error('[Temp-Service] 加载配置错误:', error);
+  }
+}
+
+async function saveTempServiceConfig() {
+  const baseUrl = tempserviceBaseUrlInput.value.trim();
+  const adminAuth = tempserviceAdminAuthInput.value.trim();
+  const customAuth = tempserviceCustomAuthInput.value.trim();
+  const domain = tempserviceDomainInput.value.trim();
+  const namePrefix = tempservicePrefixInput.value.trim() || 'oc';
+
+  if (!baseUrl || !adminAuth || !domain) {
+    showTempServiceStatus('请填写 Base URL / Admin Auth / Domain', 'error');
+    return;
+  }
+
+  // 确保已授权可访问任意域名（optional_host_permissions）
+  try {
+    const ok = await chrome.permissions.request({
+      origins: ['https://*/*']
+    });
+    if (!ok) {
+      showTempServiceStatus('需要授权访问该邮箱服务域名，否则无法请求接口', 'error');
+      return;
+    }
+  } catch (e) {
+    // 忽略：在某些环境下 request 可能抛错
+  }
+
+  try {
+    await chrome.storage.local.set({
+      tempServiceBaseUrl: baseUrl,
+      tempServiceAdminAuth: adminAuth,
+      tempServiceCustomAuth: customAuth,
+      tempServiceDomain: domain,
+      tempServiceNamePrefix: namePrefix
+    });
+
+    const resp = await chrome.runtime.sendMessage({
+      type: 'SET_TEMP_SERVICE_CONFIG',
+      baseUrl,
+      adminAuth,
+      customAuth,
+      domain,
+      namePrefix
+    });
+
+    if (!resp?.success) {
+      throw new Error(resp?.error || '配置保存失败');
+    }
+
+    showTempServiceStatus('配置已保存', 'success');
+  } catch (error) {
+    console.error('[Temp-Service] 保存配置错误:', error);
+    showTempServiceStatus('保存失败: ' + error.message, 'error');
+  }
+}
+
+async function testTempServiceConnection() {
+  // 确保已授权可访问任意域名（optional_host_permissions）
+  try {
+    const ok = await chrome.permissions.request({
+      origins: ['https://*/*']
+    });
+    if (!ok) {
+      showTempServiceStatus('需要授权访问该邮箱服务域名，否则无法请求接口', 'error');
+      return;
+    }
+  } catch (e) {
+    // 忽略：在某些环境下 request 可能抛错
+  }
+
+  tempserviceTestBtn.disabled = true;
+  tempserviceTestBtn.textContent = '测试中...';
+  try {
+    const baseUrl = tempserviceBaseUrlInput.value.trim();
+    const adminAuth = tempserviceAdminAuthInput.value.trim();
+    const customAuth = tempserviceCustomAuthInput.value.trim();
+    const domain = tempserviceDomainInput.value.trim();
+    const namePrefix = tempservicePrefixInput.value.trim() || 'oc';
+
+    const resp = await chrome.runtime.sendMessage({
+      type: 'TEST_TEMP_SERVICE_CONNECTION',
+      baseUrl,
+      adminAuth,
+      customAuth,
+      domain,
+      namePrefix
+    });
+
+    if (resp?.success) {
+      showTempServiceStatus('✓ 连接成功', 'success');
+    } else {
+      showTempServiceStatus('连接失败: ' + (resp?.error || '未知错误'), 'error');
+    }
+  } catch (error) {
+    console.error('[Temp-Service] 测试连接错误:', error);
+    showTempServiceStatus('连接失败: ' + error.message, 'error');
+  } finally {
+    tempserviceTestBtn.disabled = false;
+    tempserviceTestBtn.textContent = i18n('btnTest');
   }
 }
 
@@ -1563,6 +1713,9 @@ async function init() {
   // 加载 DuckMail 配置
   await loadDuckMailConfig();
 
+  // 加载 Temp-Service 配置
+  await loadTempServiceConfig();
+
   // 加载 Token Pool 配置
   await loadPoolConfig();
 
@@ -1659,6 +1812,10 @@ async function init() {
   moemailDurationSelect.addEventListener('change', (e) => {
     saveMoeMailConfig({ duration: parseInt(e.target.value) });
   });
+
+  // Temp-Service 配置事件
+  tempserviceSaveBtn.addEventListener('click', saveTempServiceConfig);
+  tempserviceTestBtn.addEventListener('click', testTempServiceConnection);
 
   // Token Pool 事件
   poolConnectBtn.addEventListener('click', connectToPool);
