@@ -226,15 +226,31 @@ function renderSessions(sessions) {
     if (session.status === 'completed') statusClass = 'success';
     else if (session.status === 'error') statusClass = 'error';
 
+    // running 状态显示跳过按钮
+    const skipBtn = (statusClass === 'running')
+      ? `<button class="btn-skip-session" data-session-id="${session.id}" title="${i18n('btnSkipSession')}">&times;</button>`
+      : '';
+
     return `
       <div class="session-item">
         <span class="session-id">#${index + 1}</span>
         <span class="session-status ${statusClass}"></span>
         <span class="session-step">${session.step || session.status}</span>
         <span class="session-email">${session.email || ''}</span>
+        ${skipBtn}
       </div>
     `;
   }).join('');
+
+  // 绑定跳过按钮事件
+  sessionsList.querySelectorAll('.btn-skip-session').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sessionId = btn.dataset.sessionId;
+      btn.disabled = true;
+      btn.textContent = '...';
+      chrome.runtime.sendMessage({ type: 'SKIP_SESSION', sessionId });
+    });
+  });
 }
 
 /**
@@ -1674,6 +1690,25 @@ async function init() {
     chrome.runtime.sendMessage({ type: 'SET_DENY_ACCESS', value: denyAccessToggle.checked });
   });
 
+  // IP 检测 & 页面超时（独立于代理配置）
+  const ipDetectContainer = document.getElementById('ip-detect-checkboxes');
+  const pageTimeoutInput = document.getElementById('page-timeout-input');
+
+  function renderIpDetectCheckboxes(apis, enabled) {
+    ipDetectContainer.innerHTML = apis.map(a =>
+      `<label style="font-size: 11px; display: flex; align-items: center; gap: 2px;">
+        <input type="checkbox" class="ip-detect-cb" value="${a.id}" ${enabled.includes(a.id) ? 'checked' : ''}> ${a.label}
+      </label>`
+    ).join('');
+  }
+  ipDetectContainer.addEventListener('change', () => {
+    const checked = [...ipDetectContainer.querySelectorAll('.ip-detect-cb:checked')].map(cb => cb.value);
+    chrome.runtime.sendMessage({ type: 'SET_PROXY_CONFIG', ipDetectEnabled: checked });
+  });
+  pageTimeoutInput.addEventListener('change', () => {
+    chrome.runtime.sendMessage({ type: 'SET_PROXY_CONFIG', pageTimeout: (parseInt(pageTimeoutInput.value) || 300) * 1000 });
+  });
+
   // 代理配置
   const proxyEnabledToggle = document.getElementById('proxy-enabled-toggle');
   const proxyConfigPanel = document.getElementById('proxy-config-panel');
@@ -1684,19 +1719,22 @@ async function init() {
   const proxyTestBtn = document.getElementById('proxy-test-btn');
   const proxyStatus = document.getElementById('proxy-status');
   const proxyUsageLimitInput = document.getElementById('proxy-usage-limit');
-  const pageTimeoutInput = document.getElementById('page-timeout-input');
 
+  // 加载配置：IP 检测 & 页面超时始终初始化，代理面板按开关显隐
   chrome.runtime.sendMessage({ type: 'GET_PROXY_CONFIG' }).then(res => {
     if (res) {
+      // IP 检测 & 页面超时（始终加载）
+      pageTimeoutInput.value = Math.round((res.pageTimeoutMs || 300000) / 1000);
+      if (res.ipDetectApis) renderIpDetectCheckboxes(res.ipDetectApis, res.ipDetectEnabled || []);
+
+      // 代理相关
       proxyEnabledToggle.checked = res.proxyEnabled;
       proxyApiUrlInput.value = res.proxyApiUrl || '';
       proxyApiKeyInput.value = res.proxyApiKey || '';
       proxyManualListInput.value = res.proxyManualRaw || '';
       proxyConfigPanel.style.display = res.proxyEnabled ? 'block' : 'none';
       proxyUsageLimitInput.value = res.proxyUsageLimit || 1;
-      pageTimeoutInput.value = Math.round((res.pageTimeoutMs || 300000) / 1000);
       if (res.deadProxies) renderDeadProxies(res.deadProxies);
-      if (res.ipDetectApis) renderIpDetectCheckboxes(res.ipDetectApis, res.ipDetectEnabled || []);
       if (res.parsedCount > 0) {
         proxyParsedCount.textContent = `已解析 ${res.parsedCount} 个代理`;
         proxyParsedCount.style.color = 'green';
@@ -1726,23 +1764,6 @@ async function init() {
   });
   proxyUsageLimitInput.addEventListener('change', () => {
     chrome.runtime.sendMessage({ type: 'SET_PROXY_CONFIG', usageLimit: parseInt(proxyUsageLimitInput.value) || 1 });
-  });
-  pageTimeoutInput.addEventListener('change', () => {
-    chrome.runtime.sendMessage({ type: 'SET_PROXY_CONFIG', pageTimeout: (parseInt(pageTimeoutInput.value) || 300) * 1000 });
-  });
-
-  // IP 检测 API 勾选
-  const ipDetectContainer = document.getElementById('ip-detect-checkboxes');
-  function renderIpDetectCheckboxes(apis, enabled) {
-    ipDetectContainer.innerHTML = apis.map(a =>
-      `<label style="font-size: 11px; display: flex; align-items: center; gap: 2px;">
-        <input type="checkbox" class="ip-detect-cb" value="${a.id}" ${enabled.includes(a.id) ? 'checked' : ''}> ${a.label}
-      </label>`
-    ).join('');
-  }
-  ipDetectContainer.addEventListener('change', () => {
-    const checked = [...ipDetectContainer.querySelectorAll('.ip-detect-cb:checked')].map(cb => cb.value);
-    chrome.runtime.sendMessage({ type: 'SET_PROXY_CONFIG', ipDetectEnabled: checked });
   });
 
   proxyTestBtn.addEventListener('click', async () => {

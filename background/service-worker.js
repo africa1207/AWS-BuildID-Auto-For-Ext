@@ -180,6 +180,18 @@ function getNextProxy(deadSet) {
 }
 
 /**
+ * 检查是否还有可用代理（不修改状态）
+ */
+function hasAvailableProxy(deadSet) {
+  if (proxyManualList.length === 0) return false;
+  for (const proxy of proxyManualList) {
+    const key = `${proxy.scheme}://${proxy.host}:${proxy.port}`;
+    if (!deadSet || !deadSet.has(key)) return true;
+  }
+  return false;
+}
+
+/**
  * 设置无痕窗口代理
  */
 function applyProxyToIncognito(proxy) {
@@ -554,7 +566,7 @@ async function runSessionRegistration(session) {
     let geoInfo = null;
     let pendingProxy = null;
     let fingerprint = null;
-    const useProxy = proxyEnabled && proxyManualList.length > 0;
+    let useProxy = proxyEnabled && proxyManualList.length > 0;
 
     // 无代理模式：直接检测 IP → 生成指纹
     if (!useProxy) {
@@ -576,7 +588,8 @@ async function runSessionRegistration(session) {
     }
 
     // 步骤 5: 打开无痕窗口 → 设置代理 → 加载页面（支持代理失败重试）
-    const maxProxyRetries = useProxy ? 3 : 1;
+    // 重试次数 = 可用代理数量（至少 3 次），确保有足够机会换代理
+    const maxProxyRetries = useProxy ? Math.max(3, proxyManualList.length - proxyDeadSet.size) : 1;
     let pageLoaded = false;
 
     for (let retryRound = 0; retryRound < maxProxyRetries; retryRound++) {
@@ -743,14 +756,40 @@ async function runSessionRegistration(session) {
         loadTimeout = true;
       }
 
-      // 代理模式下页面加载超时 → 标记当前代理为不可用，换代理重试
-      if (loadTimeout && useProxy && retryRound < maxProxyRetries - 1) {
+      // 代理模式下页面加载超时 → 标记当前代理为不可用
+      if (loadTimeout && useProxy) {
         if (pendingProxy) {
           const failedKey = `${pendingProxy.scheme}://${pendingProxy.host}:${pendingProxy.port}`;
           markProxyDead(failedKey);
-          console.warn(`[Session ${session.id}] 页面加载超时，标记代理 ${failedKey} 不可用，将更换代理重试`);
+          console.warn(`[Session ${session.id}] 页面加载超时，标记代理 ${failedKey} 不可用`);
         }
-        continue;
+        if (hasAvailableProxy(proxyDeadSet)) {
+          console.log(`[Session ${session.id}] 还有可用代理，将更换代理重试`);
+          session.pollAbort = false;
+          continue;
+        } else {
+          // 所有代理不可用，回退到直连模式
+          console.warn(`[Session ${session.id}] 所有代理均不可用，回退到直连模式`);
+          clearIncognitoProxy();
+          pendingProxy = null;
+          session.proxy = null;
+          // 关闭当前窗口，下一轮用直连重开
+          if (session.windowId) {
+            try { await chrome.windows.remove(session.windowId); } catch (e) { /* ignore */ }
+            session.windowId = null;
+            session.tabId = null;
+          }
+          // 切换为非代理模式，重新检测 IP 生成指纹
+          useProxy = false;
+          updateSession(session.id, { step: '代理已耗尽，切换直连模式...' });
+          try {
+            geoInfo = await detectGeoByIp();
+          } catch (e) { geoInfo = null; }
+          fingerprint = generateRandomFingerprint(geoInfo);
+          session.fingerprint = fingerprint;
+          session.pollAbort = false;
+          continue;
+        }
       }
 
       // 注入随机指纹脚本
@@ -800,14 +839,40 @@ async function runSessionRegistration(session) {
 
     const tokenResult = await pollSessionToken(session);
 
-    // 页面被阻止 (403)，换代理重试
-    if (tokenResult === 'PAGE_BLOCKED' && useProxy && retryRound < maxProxyRetries - 1) {
+    // 页面被阻止 (403) 或被手动跳过（pollAbort），换代理或回退直连
+    if ((tokenResult === 'PAGE_BLOCKED' || session.pollAbort) && useProxy) {
       if (pendingProxy) {
         const failedKey = `${pendingProxy.scheme}://${pendingProxy.host}:${pendingProxy.port}`;
         markProxyDead(failedKey);
-        console.warn(`[Session ${session.id}] 页面 403，标记代理 ${failedKey} 不可用，将更换代理重试`);
+        console.warn(`[Session ${session.id}] ${tokenResult === 'PAGE_BLOCKED' ? '页面 403' : '手动跳过'}，标记代理 ${failedKey} 不可用`);
       }
-      continue;
+      // 重置标志
+      session.pollAbort = false;
+      session.pageBlocked = false;
+
+      if (hasAvailableProxy(proxyDeadSet)) {
+        console.log(`[Session ${session.id}] 还有可用代理，将更换代理重试`);
+        continue;
+      } else {
+        // 所有代理不可用，回退到直连模式
+        console.warn(`[Session ${session.id}] 所有代理均不可用，回退到直连模式`);
+        clearIncognitoProxy();
+        pendingProxy = null;
+        session.proxy = null;
+        if (session.windowId) {
+          try { await chrome.windows.remove(session.windowId); } catch (e) { /* ignore */ }
+          session.windowId = null;
+          session.tabId = null;
+        }
+        useProxy = false;
+        updateSession(session.id, { step: '代理已耗尽，切换直连模式...' });
+        try {
+          geoInfo = await detectGeoByIp();
+        } catch (e) { geoInfo = null; }
+        fingerprint = generateRandomFingerprint(geoInfo);
+        session.fingerprint = fingerprint;
+        continue;
+      }
     }
 
     if (tokenResult && tokenResult !== 'PAGE_BLOCKED') {
@@ -1624,6 +1689,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })();
       return true;
+
+    case 'SKIP_SESSION': {
+      const targetSession = sessions.get(message.sessionId);
+      if (targetSession && targetSession.status !== 'completed' && targetSession.status !== 'error') {
+        (async () => {
+          console.log(`[Service Worker] 手动跳过会话: ${targetSession.id}`);
+
+          // 1. 拉黑当前代理
+          if (targetSession.proxy) {
+            const proxyKey = `${targetSession.proxy.scheme}://${targetSession.proxy.host}:${targetSession.proxy.port}`;
+            console.log(`[Service Worker] 拉黑代理: ${proxyKey}`);
+            markProxyDead(proxyKey);
+          }
+
+          // 2. 中断轮询
+          targetSession.pollAbort = true;
+
+          // 3. 关闭无痕窗口（触发 tab/window 操作异常，自然解除注册流程阻塞）
+          if (targetSession.windowId) {
+            try {
+              await chrome.windows.remove(targetSession.windowId);
+            } catch (e) { /* already closed */ }
+            targetSession.windowId = null;
+            targetSession.tabId = null;
+          }
+
+          sendResponse({ success: true });
+        })();
+      } else {
+        sendResponse({ success: false, error: 'Session not found or already finished' });
+        break;
+      }
+      return true;
+    }
 
     case 'STOP_REGISTRATION':
       stopRegistration();

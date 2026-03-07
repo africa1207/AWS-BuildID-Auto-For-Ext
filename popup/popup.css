@@ -690,6 +690,32 @@ body {
   text-overflow: ellipsis;
 }
 
+.btn-skip-session {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: #ff4d4f;
+  color: #fff;
+  font-size: 14px;
+  line-height: 20px;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-skip-session:hover {
+  background: #cf1322;
+}
+
+.btn-skip-session:disabled {
+  background: #d9d9d9;
+  cursor: not-allowed;
+}
+
 .session-email {
   font-family: monospace;
   font-size: 10px;

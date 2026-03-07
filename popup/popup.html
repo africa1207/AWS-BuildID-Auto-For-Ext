@@ -185,6 +185,17 @@
           </label>
         </div>
       </div>
+      <!-- IP 检测 & 页面超时（独立于代理，始终可见） -->
+      <div style="margin-top: 8px;">
+        <div style="margin-top: 4px;">
+          <label style="font-size: 11px;" data-i18n="labelIpDetectApi">IP 检测 API:</label>
+          <div id="ip-detect-checkboxes" style="display: flex; gap: 8px; margin-top: 2px; flex-wrap: wrap;"></div>
+        </div>
+        <div class="gmail-input-row" style="margin-top: 4px; align-items: center;">
+          <label style="font-size: 11px; white-space: nowrap;" data-i18n="labelPageTimeout">页面超时(秒):</label>
+          <input type="number" id="page-timeout-input" min="30" max="600" value="300" class="gmail-input" style="width: 60px; text-align: center;">
+        </div>
+      </div>
       <div id="proxy-config-panel" style="display: none; margin-top: 6px;">
         <div class="gmail-input-row">
           <textarea id="proxy-manual-list" data-i18n-placeholder="proxyManualPlaceholder" placeholder="手动代理列表（每行一个）&#10;格式: socks5://ip:port&#10;http://user:pass@ip:port&#10;ip:port" class="gmail-input" style="flex: 1; min-height: 60px; resize: vertical; font-size: 11px;"></textarea>
@@ -193,14 +204,6 @@
         <div class="gmail-input-row" style="margin-top: 4px; align-items: center;">
           <label style="font-size: 11px; white-space: nowrap;" data-i18n="labelProxyUsageLimit">单代理注册次数:</label>
           <input type="number" id="proxy-usage-limit" min="1" max="100" value="1" class="gmail-input" style="width: 50px; text-align: center;">
-        </div>
-        <div style="margin-top: 4px;">
-          <label style="font-size: 11px;" data-i18n="labelIpDetectApi">IP 检测 API:</label>
-          <div id="ip-detect-checkboxes" style="display: flex; gap: 8px; margin-top: 2px; flex-wrap: wrap;"></div>
-        </div>
-        <div class="gmail-input-row" style="margin-top: 4px; align-items: center;">
-          <label style="font-size: 11px; white-space: nowrap;" data-i18n="labelPageTimeout">页面超时(秒):</label>
-          <input type="number" id="page-timeout-input" min="30" max="600" value="300" class="gmail-input" style="width: 60px; text-align: center;">
         </div>
         <div class="gmail-input-row" style="margin-top: 4px;">
           <input type="text" id="proxy-api-url" data-i18n-placeholder="proxyApiUrlPlaceholder" placeholder="代理提取 API 地址（可选）" class="gmail-input" style="flex: 1;">
